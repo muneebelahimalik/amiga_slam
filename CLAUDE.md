@@ -95,16 +95,25 @@ map
 - `scripts/save_map.sh` — copies `~/.ros/rtabmap.db` to a timestamped directory; generates a ready-to-use `localise.sh`
 - `data/bags/vlp16_test/` — test bag recording (`/velodyne_packets` + `/velodyne_points`, ~90s)
 
-### Pending Physical Calibration
-The `base_link -> velodyne` static TF is currently **estimated** (`x=0, y=0, z=0.80 m`). Once the LiDAR is physically mounted, measure the actual offset and update **both**:
-1. `src/amiga_bringup/launch/tf_static_base_to_velodyne.launch.py` (`--z` argument)
-2. `src/amiga_bringup/urdf/amiga_min.urdf` (`<origin xyz=...>` in the `base_to_velodyne` joint)
+### Physical Calibration (completed 2025-03-05)
+The `base_link -> velodyne` static TF has been set from physical measurements:
 
-Amiga approximate geometry used for URDF estimates:
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| x | **1.130 m** | 44.5 in forward from wheelbase midpoint to LiDAR spin axis |
+| y | **0.000 m** | Centered on robot centreline |
+| z | **0.800 m** | LiDAR spin axis height above ground |
+| roll/pitch/yaw | **0 rad** | Mount is level; LiDAR front aligns with robot +x |
+
+These values are set identically in **both**:
+1. `src/amiga_bringup/launch/tf_static_base_to_velodyne.launch.py`
+2. `src/amiga_bringup/urdf/amiga_min.urdf` (`base_to_velodyne` joint origin)
+
+Amiga geometry:
 - Robot footprint: 1.10 m (L) × 0.93 m (W), height 0.76 m
 - Wheel diameter: ~0.38 m → axle at z=0.19 m above ground
 - `base_link`: center of footprint at ground level (z=0)
-- `velodyne`: 0.80 m above base_link (measure and correct this)
+- LiDAR is front-mounted on the cross bar, 1.130 m ahead of the wheelbase midpoint
 
 ### RTAB-Map LiDAR-Only Mode
 By default, `rtabmap` and `rtabmap_viz` wait for camera topics (`/rgb/image`, `/depth/image`). For LiDAR-only operation, these params are required on both nodes:
