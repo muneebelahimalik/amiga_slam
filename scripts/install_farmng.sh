@@ -41,18 +41,21 @@ fi
 
 echo "[install_farmng] Installing farm-ng-amiga and farm-ng-core..."
 
-# Install into the system Python (user install to avoid needing sudo)
+# Install into the system Python (user install to avoid needing sudo).
+# protobuf>=3.20 required for farm-ng (system apt protobuf 3.12.4 is too old).
+${PY} -m pip install ${UPGRADE_FLAG} --user "protobuf>=3.20,<=5.27.5"
 ${PY} -m pip install ${UPGRADE_FLAG} farm-ng-amiga farm-ng-core
 
 echo ""
 echo "[install_farmng] Verifying install..."
 ${PY} -c "
-from farm_ng.canbus.packet import AmigaTpdo1, Twist2d
+from farm_ng.canbus.packet import AmigaTpdo1
+from farm_ng.canbus.canbus_pb2 import Twist2d
 from farm_ng.core.event_client import EventClient
 from farm_ng.core.event_service_pb2 import EventServiceConfig, SubscribeRequest
 from farm_ng.core.uri_pb2 import Uri
 print('  farm_ng.canbus.packet.AmigaTpdo1  OK')
-print('  farm_ng.canbus.packet.Twist2d     OK')
+print('  farm_ng.canbus.canbus_pb2.Twist2d OK')
 print('  farm_ng.core.event_client         OK')
 
 # Check payload_to_protobuf location

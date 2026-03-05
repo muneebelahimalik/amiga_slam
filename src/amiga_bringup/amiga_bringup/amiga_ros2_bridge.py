@@ -64,7 +64,8 @@ from nav_msgs.msg import Odometry
 # farm-ng SDK imports — OS 2.0 (Barley) layout
 # ---------------------------------------------------------------------------
 try:
-    from farm_ng.canbus.packet import AmigaTpdo1, Twist2d
+    from farm_ng.canbus.packet import AmigaTpdo1
+    from farm_ng.canbus.canbus_pb2 import Twist2d
     from farm_ng.core.event_client import EventClient
     from farm_ng.core.event_service_pb2 import EventServiceConfig, SubscribeRequest
     from farm_ng.core.uri_pb2 import Uri
@@ -236,8 +237,8 @@ class AmigaRos2Bridge(Node):
                     vel_msg = TwistStamped()
                     vel_msg.header.stamp = self.get_clock().now().to_msg()
                     vel_msg.header.frame_id = 'base_link'
-                    vel_msg.twist.linear.x = float(tpdo1.measured_speed)
-                    vel_msg.twist.angular.z = float(tpdo1.measured_angular_rate)
+                    vel_msg.twist.linear.x = float(tpdo1.meas_speed)
+                    vel_msg.twist.angular.z = float(tpdo1.meas_ang_rate)
                     self._vel_pub.publish(vel_msg)
 
                     # ---- forward velocity command to Amiga ----
