@@ -1,0 +1,9 @@
+digraph G {
+"base_link" -> "velodyne"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"odom" -> "base_link"[label=" Broadcaster: default_authority\nAverage rate: 4.682\nBuffer length: 3.631\nMost recent transform: 1772651162.683819\nOldest transform: 1772651159.052976\n"];
+"map" -> "odom"[label=" Broadcaster: default_authority\nAverage rate: 20.2\nBuffer length: 5.0\nMost recent transform: 1772651163.045458\nOldest transform: 1772651158.045452\n"];
+edge [style=invis];
+ subgraph cluster_legend { style=bold; color=black; label ="view_frames Result";
+"Recorded at time: 1772651162.9497204"[ shape=plaintext ] ;
+}->"map";
+}

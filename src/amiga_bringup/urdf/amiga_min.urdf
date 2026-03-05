@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<robot name="amiga_min">
+  <link name="base_link"/>
+  <link name="velodyne"/>
+
+  <!-- TODO: update xyz/rpy after you mount the LiDAR -->
+  <joint name="base_to_velodyne" type="fixed">
+    <parent link="base_link"/>
+    <child link="velodyne"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+</robot>
