@@ -51,7 +51,6 @@ from __future__ import annotations
 
 import asyncio
 import math
-import queue
 import threading
 from typing import Optional
 
@@ -197,39 +196,78 @@ class AmigaRos2Bridge(Node):
             t.cancel()
         for t in done:
             if not t.cancelled() and t.exception():
-                self.get_logger().error(f'async task raised: {t.exception()!r}')
+                exc = t.exception()
+                self.get_logger().error(f'async task raised: {exc!r}')
+                # RuntimeError from first-message timeout: print the full
+                # diagnostic message so it's visible in the ROS 2 log.
+                if isinstance(exc, RuntimeError):
+                    self.get_logger().fatal(str(exc))
 
     # ------------------------------------------------------------------
     # Canbus: read AmigaTpdo1 → /amiga/vel  AND  send Twist2d commands
     #
-    # Pattern mirrors farm-ng pose_generator example:
-    #   subscribe(decode=False) → payload_to_protobuf → AmigaTpdo1.from_proto
-    #   request_reply("/twist", Twist2d(...)) — within the same loop
+    # Pattern mirrors farm-ng filter_client.py / pose_generator:
+    #   subscribe(config.subscriptions[0], decode=False)
+    #   → payload_to_protobuf(event, payload) → AmigaTpdo1.from_proto
+    #   → request_reply("/twist", Twist2d(...)) within the same loop
     # ------------------------------------------------------------------
+
+    # First-message timeout: if the canbus service never sends a message
+    # (wrong port, wrong path, service not running) this makes the node
+    # raise a clear error immediately instead of hanging forever.
+    _CANBUS_FIRST_MSG_TIMEOUT = 20.0   # seconds
+
+    @staticmethod
+    async def _anext_with_timeout(aiter, timeout: float):
+        """Await the next item from an async iterator with a timeout.
+        Returns the item, or raises asyncio.TimeoutError on timeout."""
+        return await asyncio.wait_for(aiter.__anext__(), timeout=timeout)
 
     async def _run_canbus(self) -> None:
         config = _make_config(
             'canbus', self._host, self._canbus_port,
             '/state', 'service_name=canbus',
         )
-        sub_req = SubscribeRequest(
-            uri=Uri(path='/state', query='service_name=canbus'),
-            every_n=1,
-        )
 
         while rclpy.ok():
             try:
-                self.get_logger().info('Connecting to canbus service…')
+                self.get_logger().info(
+                    f'Connecting to canbus service at '
+                    f'{self._host}:{self._canbus_port} …'
+                )
                 client = EventClient(config)
 
-                async for event, payload in client.subscribe(sub_req, decode=False):
+                # Use config.subscriptions[0] — same pattern as filter_client.py.
+                gen = client.subscribe(config.subscriptions[0], decode=False)
 
+                # Wait up to _CANBUS_FIRST_MSG_TIMEOUT seconds for the first
+                # message; give a clear error rather than hanging silently.
+                try:
+                    event, payload = await self._anext_with_timeout(
+                        gen, self._CANBUS_FIRST_MSG_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    raise RuntimeError(
+                        f'canbus service at {self._host}:{self._canbus_port} '
+                        f'did not send any message within '
+                        f'{self._CANBUS_FIRST_MSG_TIMEOUT:.0f} s.\n'
+                        f'  • Check the port — run:  '
+                        f'python3 scripts/test_canbus.py --scan\n'
+                        f'  • Verify Tailscale is active on both devices\n'
+                        f'  • Verify the Amiga canbus service is running'
+                    )
+
+                self.get_logger().info(
+                    'Canbus service connected — receiving AmigaTpdo1 messages.'
+                )
+
+                # Process first message, then continue the stream.
+                while True:
                     # ---- decode state ----
                     if _payload_to_proto is not None:
                         message = _payload_to_proto(event, payload)
                         tpdo1 = AmigaTpdo1.from_proto(message.amiga_tpdo1)
                     else:
-                        # Fallback: try direct decode (may work on some SDK versions)
                         tpdo1 = AmigaTpdo1.from_proto(payload)
 
                     # ---- publish /amiga/vel ----
@@ -256,6 +294,15 @@ class AmigaRos2Bridge(Node):
                             f'request_reply /twist failed: {cmd_exc!r}'
                         )
 
+                    # Advance to next message
+                    try:
+                        event, payload = await gen.__anext__()
+                    except StopAsyncIteration:
+                        self.get_logger().warn('Canbus stream ended — reconnecting…')
+                        break
+
+            except RuntimeError:
+                raise   # propagate first-message-timeout error to _async_main
             except Exception as exc:
                 self.get_logger().warn(
                     f'canbus error: {exc!r}  — retrying in 3 s'
