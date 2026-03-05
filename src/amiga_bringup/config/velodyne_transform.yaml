@@ -1,7 +1,7 @@
 velodyne_transform_node:
   ros__parameters:
     model: VLP16
-    calibration: ""
+    calibration: /opt/ros/humble/share/velodyne_pointcloud/params/VLP16db.yaml
     min_range: 0.5
     max_range: 100.0
 
