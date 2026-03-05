@@ -201,11 +201,7 @@ local_costmap:
       height: 10
       resolution: 0.10           # 10 cm cells — good for 0.93 m wide robot
       # Amiga footprint: 1.10 m (L) × 0.93 m (W), base_link at centre
-      robot_footprint:
-        - [0.55,  0.465]
-        - [-0.55, 0.465]
-        - [-0.55, -0.465]
-        - [0.55,  -0.465]
+      footprint: "[[0.55, 0.465], [-0.55, 0.465], [-0.55, -0.465], [0.55, -0.465]]"
       track_unknown_space: false
       plugins: ["obstacle_layer", "inflation_layer"]
 
@@ -244,11 +240,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       resolution: 0.10
-      robot_footprint:
-        - [0.55,  0.465]
-        - [-0.55, 0.465]
-        - [-0.55, -0.465]
-        - [0.55,  -0.465]
+      footprint: "[[0.55, 0.465], [-0.55, 0.465], [-0.55, -0.465], [0.55, -0.465]]"
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
 
