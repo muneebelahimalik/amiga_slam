@@ -129,11 +129,15 @@ Optional EKF fusion (amiga_bringup_nodes.launch.py use_ekf:=true):
 7. **`rtabmap_viz`** — 3D visualization (subscribes to rtabmap output only, not raw scans)
 
 ### Key Files
+- `src/amiga_bringup/amiga_bringup/amiga_ros2_bridge.py` — **native gRPC bridge**; connects to Amiga over Tailscale; publishes `/amiga/vel` + `/amiga/pose`; forwards `/cmd_vel` to Amiga
 - `src/amiga_bringup/amiga_bringup/amiga_odometry.py` — wheel odometry node; `/amiga/vel` → `/wheel_odom`
-- `src/amiga_bringup/amiga_bringup/amiga_velocity_bridge.py` — cmd_vel relay; `/cmd_vel` → `/amiga/cmd_vel` with safety watchdog
+- `src/amiga_bringup/amiga_bringup/amiga_velocity_bridge.py` — fallback cmd_vel relay (only needed without gRPC bridge)
 - `src/amiga_bringup/config/ekf.yaml` — robot_localization EKF config fusing ICP + wheel odometry
-- `src/amiga_bringup/launch/slam_full.launch.py` — **RECOMMENDED** all-in-one live launch: VLP-16 + Amiga nodes + SLAM
+- `src/amiga_bringup/launch/slam_full.launch.py` — **RECOMMENDED** all-in-one live launch: gRPC bridge + VLP-16 + SLAM
+- `src/amiga_bringup/launch/amiga_grpc_bridge.launch.py` — launch just the native gRPC bridge node
 - `src/amiga_bringup/launch/amiga_bringup_nodes.launch.py` — Amiga odometry + velocity bridge (with optional EKF)
+- `config/service_configs/canbus_config.json` — farm-ng canbus service config (port 6001)
+- `config/service_configs/filter_config.json` — farm-ng filter service config (port 20001)
 - `src/amiga_bringup/launch/sensors_live.launch.py` — top-level live sensor launch (includes `velodyne_vlp16.launch.py` + `tf_static_base_to_velodyne.launch.py`)
 - `src/amiga_bringup/launch/slam_rtabmap_lidar3d.launch.py` — SLAM stack (ICP odom + rtabmap + viz + robot_state_publisher); args: `use_sim_time`, `cloud_topic`, `database_path`, `rviz`
 - `src/amiga_bringup/launch/slam_live.launch.py` — live all-in-one: VLP-16 driver + static TF + SLAM (`use_sim_time=false`)
@@ -170,27 +174,33 @@ Amiga geometry:
 The `amiga_ros_bridge` is written for **ROS 1 Noetic** (catkin, roslaunch).  Our SLAM stack
 runs in **ROS 2 Humble**.  Three options to bridge the gap:
 
-**Option A — `ros1_bridge` (recommended for initial testing):**
+**Implemented: native ROS 2 gRPC bridge (no ROS 1 required)**
+
+The `amiga_ros2_bridge` node connects directly to the Amiga's gRPC services
+over Tailscale using the farm-ng Python SDK — the same SDK used by filter_client.py.
+
 ```bash
-# Terminal 1 (ROS 1 side): start the Amiga mock server or real robot bridge
-source ~/catkin_ws/devel/setup.bash
-roslaunch amiga_ros_bridge amiga_ros_bridge.launch
+# Start the bridge (Tailscale must be active)
+ros2 launch amiga_bringup amiga_grpc_bridge.launch.py
 
-# Terminal 2: start ros1_bridge (dynamic bridge)
-source /opt/ros/noetic/setup.bash && source /opt/ros/humble/setup.bash
-ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
+# Override host if needed:
+ros2 launch amiga_bringup amiga_grpc_bridge.launch.py \
+    host:=camphor-clone.tail0be07.ts.net canbus_port:=6001 filter_port:=20001
 ```
-After this, `/amiga/vel` and `/amiga/cmd_vel` appear in ROS 2.
 
-**Option B — native ROS 2 gRPC client (future work):**
-Write a ROS 2 Python node using the farm-ng Python SDK (farm-ng-amiga) to talk
-directly to the Amiga's canbus gRPC service.  Topics and behaviour are identical.
+Service configs (for standalone SDK testing) are in `config/service_configs/`:
+- `canbus_config.json` — canbus service (wheel velocity + commands)
+- `filter_config.json` — filter service (GPS + IMU pose)
 
-**Option C — farm-ng Amiga ROS 2 package (check farm-ng repo):**
-farm-ng may provide a native ROS 2 driver.  If available, it replaces the bridge entirely.
+Verify connectivity before running ROS 2:
+```bash
+# Test filter service (already confirmed working):
+cd ~/farm-ng-amiga/py/examples/filter_client
+python3 main.py --service-config ~/amiga_slam/config/service_configs/filter_config.json
 
-Once `/amiga/vel` is live in ROS 2, the `amiga_odometry` node and `amiga_velocity_bridge`
-work transparently regardless of which bridging method is used.
+# Test canbus service (new):
+# (use a similar EventClient subscriber script, or check AmigaTpdo1 messages)
+```
 
 ### Amiga Topics (ROS 2)
 

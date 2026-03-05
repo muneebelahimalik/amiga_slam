@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'amiga_odometry = amiga_bringup.amiga_odometry:main',
             'amiga_velocity_bridge = amiga_bringup.amiga_velocity_bridge:main',
+            'amiga_ros2_bridge = amiga_bringup.amiga_ros2_bridge:main',
         ],
     },
 )
