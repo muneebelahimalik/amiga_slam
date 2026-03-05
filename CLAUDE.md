@@ -30,16 +30,16 @@ bash scripts/run_live.sh
 ros2 launch amiga_bringup sensors_live.launch.py
 ```
 
-**Run SLAM (requires sensors running first or bag playback):**
+**Run SLAM (requires sensors running first):**
 ```bash
 ros2 launch amiga_bringup slam_rtabmap_lidar3d.launch.py
-# With bag replay:
-ros2 launch amiga_bringup slam_rtabmap_lidar3d.launch.py use_sim_time:=true cloud_topic:=/velodyne_points
 ```
 
-**Play back a recorded bag:**
+**Run bag replay + SLAM together (all-in-one):**
 ```bash
-ros2 bag play data/bags/vlp16_test/ --clock
+ros2 launch amiga_bringup slam_bag_replay.launch.py
+# Custom bag or slower replay:
+ros2 launch amiga_bringup slam_bag_replay.launch.py bag_path:=/path/to/bag playback_rate:=0.5
 ```
 
 **Run tests:**
@@ -67,13 +67,27 @@ map
 
 ### Key Files
 - `src/amiga_bringup/launch/sensors_live.launch.py` — top-level live sensor launch (includes `velodyne_vlp16.launch.py` + `tf_static_base_to_velodyne.launch.py`)
-- `src/amiga_bringup/launch/slam_rtabmap_lidar3d.launch.py` — SLAM launch with args `use_sim_time` and `cloud_topic`
+- `src/amiga_bringup/launch/slam_rtabmap_lidar3d.launch.py` — SLAM stack (ICP odom + rtabmap + viz); args `use_sim_time` and `cloud_topic`
+- `src/amiga_bringup/launch/slam_bag_replay.launch.py` — bag replay + static TF + SLAM in one launch; `use_sim_time` is hardcoded true; bag starts after a 3s delay so SLAM nodes are ready
 - `src/amiga_bringup/config/velodyne_transform.yaml` — VLP-16 pointcloud conversion params (range, organization, FOV)
 - `src/amiga_bringup/urdf/amiga_min.urdf` — minimal URDF with only `base_link` and `velodyne` links
 - `data/bags/vlp16_test/` — test bag recording (`/velodyne_packets` + `/velodyne_points`, ~90s)
 
 ### Pending Physical Calibration
 The `base_link -> velodyne` static TF is currently identity (`0 0 0 0 0 0`). Once the LiDAR is physically mounted, update the values in `src/amiga_bringup/launch/tf_static_base_to_velodyne.launch.py` and `src/amiga_bringup/urdf/amiga_min.urdf`.
+
+### RTAB-Map LiDAR-Only Mode
+By default, `rtabmap` and `rtabmap_viz` wait for camera topics (`/rgb/image`, `/depth/image`). For LiDAR-only operation, these params are required on both nodes:
+```python
+'subscribe_scan_cloud': True,
+'subscribe_rgb': False,
+'subscribe_depth': False,
+```
+
+### rtabmap_viz and Bag Replay
+`rtabmap_viz` doing TF lookups at raw scan timestamps causes "extrapolation into the future" warnings during bag replay (the scan header timestamp arrives slightly ahead of the TF buffer). Fix: set `subscribe_scan_cloud: False` in rtabmap_viz so it only visualises rtabmap's processed output. Setting `subscribe_odom: True` does **not** suppress these warnings — the node ignores it.
+
+Expected SLAM output during bag replay: ICP odometry at ~10 Hz, rtabmap at ~1 Hz. `WM=1-3` in rtabmap logs is normal (old nodes transferred to Long-Term Memory).
 
 ### Redundant Launch Files
 Several launch files overlap in functionality (legacy/exploratory versions):
