@@ -42,6 +42,10 @@ def generate_launch_description():
             'publish_tf': True,
             'approx_sync': True,
             'wait_for_transform': 0.2,
+            # LiDAR-only mode: disable camera sync, enable point cloud input
+            'subscribe_scan_cloud': True,
+            'subscribe_rgb': False,
+            'subscribe_depth': False,
         }],
         remappings=[
             ('scan_cloud', cloud_topic),
@@ -60,9 +64,14 @@ def generate_launch_description():
             'odom_frame_id': 'odom',
             'map_frame_id': 'map',
             'approx_sync': True,
+            'subscribe_scan_cloud': True,
+            'subscribe_rgb': False,
+            'subscribe_depth': False,
+            'subscribe_odom': True,
         }],
         remappings=[
             ('scan_cloud', cloud_topic),
+            ('odom', '/odom'),
         ]
     )
 
