@@ -38,13 +38,26 @@ ros2 launch amiga_bringup slam_live.launch.py
 **Run SLAM only (sensors already running separately):**
 ```bash
 ros2 launch amiga_bringup slam_rtabmap_lidar3d.launch.py
+# With RViz and a custom DB path:
+ros2 launch amiga_bringup slam_rtabmap_lidar3d.launch.py rviz:=true database_path:=~/maps/field.db
 ```
 
 **Run bag replay + SLAM together (all-in-one):**
 ```bash
 ros2 launch amiga_bringup slam_bag_replay.launch.py
-# Custom bag or slower replay:
-ros2 launch amiga_bringup slam_bag_replay.launch.py bag_path:=/path/to/bag playback_rate:=0.5
+# Custom bag, slower replay, custom database:
+ros2 launch amiga_bringup slam_bag_replay.launch.py bag_path:=/path/to/bag playback_rate:=0.5 database_path:=~/maps/field.db
+```
+
+**Save the built map (while SLAM is running):**
+```bash
+bash scripts/save_map.sh                     # saves to ~/maps/<timestamp>/
+bash scripts/save_map.sh /data/field_map     # saves to specified directory
+```
+
+**Localise against a saved map (live robot, no new mapping):**
+```bash
+ros2 launch amiga_bringup slam_localization.launch.py database_path:=~/maps/field.db
 ```
 
 **Run tests:**
@@ -72,15 +85,26 @@ map
 
 ### Key Files
 - `src/amiga_bringup/launch/sensors_live.launch.py` — top-level live sensor launch (includes `velodyne_vlp16.launch.py` + `tf_static_base_to_velodyne.launch.py`)
-- `src/amiga_bringup/launch/slam_rtabmap_lidar3d.launch.py` — SLAM stack (ICP odom + rtabmap + viz); args `use_sim_time` and `cloud_topic`
+- `src/amiga_bringup/launch/slam_rtabmap_lidar3d.launch.py` — SLAM stack (ICP odom + rtabmap + viz + robot_state_publisher); args: `use_sim_time`, `cloud_topic`, `database_path`, `rviz`
 - `src/amiga_bringup/launch/slam_live.launch.py` — live all-in-one: VLP-16 driver + static TF + SLAM (`use_sim_time=false`)
-- `src/amiga_bringup/launch/slam_bag_replay.launch.py` — bag replay + static TF + SLAM in one launch; `use_sim_time` is hardcoded true; bag starts after a 3s delay so SLAM nodes are ready
+- `src/amiga_bringup/launch/slam_bag_replay.launch.py` — bag replay + static TF + SLAM in one launch; `use_sim_time` is hardcoded true; bag starts after a 3s delay so SLAM nodes are ready; arg: `database_path`
+- `src/amiga_bringup/launch/slam_localization.launch.py` — localization-only mode; loads saved `database_path`, sets `Mem/IncrementalMemory=false`
 - `src/amiga_bringup/config/velodyne_transform.yaml` — VLP-16 pointcloud conversion params (range, organization, FOV); calibration must be a full absolute path — see note below
-- `src/amiga_bringup/urdf/amiga_min.urdf` — minimal URDF with only `base_link` and `velodyne` links
+- `src/amiga_bringup/urdf/amiga_min.urdf` — URDF with `base_link` (ground-level center) and `velodyne` (estimated z=0.80 m above base_link); includes visual/collision/inertia
+- `src/amiga_bringup/rviz/slam_lidar.rviz` — RViz2 config showing TF, live cloud, map cloud, occupancy grid, odometry, trajectory, robot model
+- `scripts/save_map.sh` — copies `~/.ros/rtabmap.db` to a timestamped directory; generates a ready-to-use `localise.sh`
 - `data/bags/vlp16_test/` — test bag recording (`/velodyne_packets` + `/velodyne_points`, ~90s)
 
 ### Pending Physical Calibration
-The `base_link -> velodyne` static TF is currently identity (`0 0 0 0 0 0`). Once the LiDAR is physically mounted, update the values in `src/amiga_bringup/launch/tf_static_base_to_velodyne.launch.py` and `src/amiga_bringup/urdf/amiga_min.urdf`.
+The `base_link -> velodyne` static TF is currently **estimated** (`x=0, y=0, z=0.80 m`). Once the LiDAR is physically mounted, measure the actual offset and update **both**:
+1. `src/amiga_bringup/launch/tf_static_base_to_velodyne.launch.py` (`--z` argument)
+2. `src/amiga_bringup/urdf/amiga_min.urdf` (`<origin xyz=...>` in the `base_to_velodyne` joint)
+
+Amiga approximate geometry used for URDF estimates:
+- Robot footprint: 1.10 m (L) × 0.93 m (W), height 0.76 m
+- Wheel diameter: ~0.38 m → axle at z=0.19 m above ground
+- `base_link`: center of footprint at ground level (z=0)
+- `velodyne`: 0.80 m above base_link (measure and correct this)
 
 ### RTAB-Map LiDAR-Only Mode
 By default, `rtabmap` and `rtabmap_viz` wait for camera topics (`/rgb/image`, `/depth/image`). For LiDAR-only operation, these params are required on both nodes:

@@ -24,6 +24,8 @@ def generate_launch_description():
         )
     )
 
+    database_path = LaunchConfiguration('database_path')
+
     # SLAM stack (use_sim_time=true to consume /clock from bag)
     slam = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -32,6 +34,7 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': 'true',
             'cloud_topic': '/velodyne_points',
+            'database_path': database_path,
         }.items(),
     )
 
@@ -64,6 +67,9 @@ def generate_launch_description():
             default_value='1.0',
             description='Bag playback speed multiplier',
         ),
+        DeclareLaunchArgument(
+            'database_path', default_value='~/.ros/rtabmap.db',
+            description='Path to RTAB-Map database (map saved here on exit)'),
         tf_static,
         slam,
         bag_play,
