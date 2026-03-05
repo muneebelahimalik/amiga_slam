@@ -52,7 +52,8 @@ def generate_launch_description():
         ]
     )
 
-    # Visualization
+    # Visualization — subscribes only to rtabmap's processed output, not raw scans,
+    # to avoid TF timing races during bag replay.
     rtabmap_viz = Node(
         package='rtabmap_viz',
         executable='rtabmap_viz',
@@ -63,16 +64,10 @@ def generate_launch_description():
             'frame_id': 'base_link',
             'odom_frame_id': 'odom',
             'map_frame_id': 'map',
-            'approx_sync': True,
-            'subscribe_scan_cloud': True,
+            'subscribe_scan_cloud': False,
             'subscribe_rgb': False,
             'subscribe_depth': False,
-            'subscribe_odom': True,
         }],
-        remappings=[
-            ('scan_cloud', cloud_topic),
-            ('odom', '/odom'),
-        ]
     )
 
     return LaunchDescription([
