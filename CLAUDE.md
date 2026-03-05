@@ -75,7 +75,7 @@ map
 - `src/amiga_bringup/launch/slam_rtabmap_lidar3d.launch.py` — SLAM stack (ICP odom + rtabmap + viz); args `use_sim_time` and `cloud_topic`
 - `src/amiga_bringup/launch/slam_live.launch.py` — live all-in-one: VLP-16 driver + static TF + SLAM (`use_sim_time=false`)
 - `src/amiga_bringup/launch/slam_bag_replay.launch.py` — bag replay + static TF + SLAM in one launch; `use_sim_time` is hardcoded true; bag starts after a 3s delay so SLAM nodes are ready
-- `src/amiga_bringup/config/velodyne_transform.yaml` — VLP-16 pointcloud conversion params (range, organization, FOV)
+- `src/amiga_bringup/config/velodyne_transform.yaml` — VLP-16 pointcloud conversion params (range, organization, FOV); calibration must be a full absolute path — see note below
 - `src/amiga_bringup/urdf/amiga_min.urdf` — minimal URDF with only `base_link` and `velodyne` links
 - `data/bags/vlp16_test/` — test bag recording (`/velodyne_packets` + `/velodyne_points`, ~90s)
 
@@ -94,6 +94,16 @@ By default, `rtabmap` and `rtabmap_viz` wait for camera topics (`/rgb/image`, `/
 `rtabmap_viz` doing TF lookups at raw scan timestamps causes "extrapolation into the future" warnings during bag replay (the scan header timestamp arrives slightly ahead of the TF buffer). Fix: set `subscribe_scan_cloud: False` in rtabmap_viz so it only visualises rtabmap's processed output. Setting `subscribe_odom: True` does **not** suppress these warnings — the node ignores it.
 
 Expected SLAM output during bag replay: ICP odometry at ~10 Hz, rtabmap at ~1 Hz. `WM=1-3` in rtabmap logs is normal (old nodes transferred to Long-Term Memory).
+
+### Velodyne Calibration File
+`velodyne_transform_node` requires a calibration file. When using a custom params file (not the upstream one), the `calibration` field must be an **absolute path** — a bare filename like `VLP16db.yaml` will fail with "Failed to open calibration file":
+
+```yaml
+# config/velodyne_transform.yaml
+calibration: /opt/ros/humble/share/velodyne_pointcloud/params/VLP16db.yaml
+```
+
+An empty string (`calibration: ""`) also crashes the node.
 
 ### Redundant Launch Files
 Several launch files overlap in functionality (legacy/exploratory versions):
