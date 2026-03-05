@@ -22,4 +22,10 @@ setup(
     maintainer_email='59524535+muneebelahimalik@users.noreply.github.com',
     description='Bringup for Farm-ng Amiga SLAM stack',
     license='MIT',
+    entry_points={
+        'console_scripts': [
+            'amiga_odometry = amiga_bringup.amiga_odometry:main',
+            'amiga_velocity_bridge = amiga_bringup.amiga_velocity_bridge:main',
+        ],
+    },
 )

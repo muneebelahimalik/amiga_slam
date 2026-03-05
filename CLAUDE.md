@@ -30,9 +30,22 @@ bash scripts/run_live.sh
 ros2 launch amiga_bringup sensors_live.launch.py
 ```
 
-**Run live sensors + SLAM together (all-in-one):**
+**Run live sensors + SLAM together (all-in-one, no Amiga odometry):**
 ```bash
 ros2 launch amiga_bringup slam_live.launch.py
+```
+
+**Run full stack (VLP-16 + Amiga wheel odometry bridge + SLAM) — RECOMMENDED:**
+```bash
+ros2 launch amiga_bringup slam_full.launch.py
+ros2 launch amiga_bringup slam_full.launch.py rviz:=true database_path:=~/maps/field.db
+```
+
+**Run only the Amiga bridge nodes (odometry + cmd_vel relay):**
+```bash
+ros2 launch amiga_bringup amiga_bringup_nodes.launch.py
+# With EKF fusion of ICP + wheel odometry:
+ros2 launch amiga_bringup amiga_bringup_nodes.launch.py use_ekf:=true
 ```
 
 **Run SLAM only (sensors already running separately):**
@@ -76,14 +89,51 @@ map
            └── velodyne  (static TF, identity until LiDAR is physically measured)
 ```
 
-### Node Pipeline
+### Node Pipeline (slam_full.launch.py)
+
+```
+Amiga gRPC canbus service (on robot hardware)
+    │
+    │  amiga_ros_bridge (ROS 1 Noetic)  ← OR ─── ros1_bridge ─── OR native ROS 2 gRPC client
+    │        /amiga/vel  (TwistStamped)
+    │        /amiga/cmd_vel (Twist)
+    │
+    ▼ ROS 2 Humble
+┌─────────────────────────────────────────────────────────────────────┐
+│  amiga_odometry       /amiga/vel → /wheel_odom (dead-reckoning)     │
+│  amiga_velocity_bridge /cmd_vel  → /amiga/cmd_vel (Nav2 → Amiga)    │
+└─────────────────────────────────────────────────────────────────────┘
+    │                       │
+    │ /wheel_odom           │ /cmd_vel (from Nav2 / teleop)
+    ▼                       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  velodyne_driver_node → /velodyne_packets                           │
+│  velodyne_transform_node → /velodyne_points                         │
+│  icp_odometry  /velodyne_points → /odom  +  odom→base_link TF      │
+│  rtabmap       /velodyne_points + /odom → map, map→odom TF         │
+│  rtabmap_viz   (rtabmap output only, no raw scan subscription)      │
+│  robot_state_publisher  URDF → base_link→velodyne TF               │
+└─────────────────────────────────────────────────────────────────────┘
+
+Optional EKF fusion (amiga_bringup_nodes.launch.py use_ekf:=true):
+    /odom (ICP) + /wheel_odom (wheels) → ekf_filter_node → /odometry/filtered
+    (when enabled: icp_odometry publish_tf must be false; EKF owns odom→base_link)
+```
+
 1. **`velodyne_driver_node`** — reads UDP packets from VLP-16 at `192.168.1.201:2368`, publishes `/velodyne_packets`
-2. **`velodyne_transform_node`** — converts packets to `sensor_msgs/PointCloud2` on `/velodyne_points`; configured via `config/velodyne_transform.yaml`
-3. **`icp_odometry`** (rtabmap_odom) — subscribes to `/velodyne_points` (remapped from `scan_cloud`), publishes `odom -> base_link` TF
-4. **`rtabmap`** (rtabmap_slam) — builds the map, publishes `map -> odom` TF
-5. **`rtabmap_viz`** — 3D visualization
+2. **`velodyne_transform_node`** — converts packets → `sensor_msgs/PointCloud2` on `/velodyne_points`
+3. **`amiga_odometry`** — `/amiga/vel` (TwistStamped) → `/wheel_odom` (Odometry); dead-reckoning integration
+4. **`amiga_velocity_bridge`** — `/cmd_vel` (Twist) → `/amiga/cmd_vel`; safety watchdog stops robot if commands stop
+5. **`icp_odometry`** (rtabmap_odom) — subscribes to `/velodyne_points`, publishes `odom → base_link` TF
+6. **`rtabmap`** (rtabmap_slam) — builds the map, publishes `map → odom` TF, saves database
+7. **`rtabmap_viz`** — 3D visualization (subscribes to rtabmap output only, not raw scans)
 
 ### Key Files
+- `src/amiga_bringup/amiga_bringup/amiga_odometry.py` — wheel odometry node; `/amiga/vel` → `/wheel_odom`
+- `src/amiga_bringup/amiga_bringup/amiga_velocity_bridge.py` — cmd_vel relay; `/cmd_vel` → `/amiga/cmd_vel` with safety watchdog
+- `src/amiga_bringup/config/ekf.yaml` — robot_localization EKF config fusing ICP + wheel odometry
+- `src/amiga_bringup/launch/slam_full.launch.py` — **RECOMMENDED** all-in-one live launch: VLP-16 + Amiga nodes + SLAM
+- `src/amiga_bringup/launch/amiga_bringup_nodes.launch.py` — Amiga odometry + velocity bridge (with optional EKF)
 - `src/amiga_bringup/launch/sensors_live.launch.py` — top-level live sensor launch (includes `velodyne_vlp16.launch.py` + `tf_static_base_to_velodyne.launch.py`)
 - `src/amiga_bringup/launch/slam_rtabmap_lidar3d.launch.py` — SLAM stack (ICP odom + rtabmap + viz + robot_state_publisher); args: `use_sim_time`, `cloud_topic`, `database_path`, `rviz`
 - `src/amiga_bringup/launch/slam_live.launch.py` — live all-in-one: VLP-16 driver + static TF + SLAM (`use_sim_time=false`)
@@ -114,6 +164,43 @@ Amiga geometry:
 - Wheel diameter: ~0.38 m → axle at z=0.19 m above ground
 - `base_link`: center of footprint at ground level (z=0)
 - LiDAR is front-mounted on the cross bar, 1.130 m ahead of the wheelbase midpoint
+
+### Amiga ROS Bridge Integration (Stage 2)
+
+The `amiga_ros_bridge` is written for **ROS 1 Noetic** (catkin, roslaunch).  Our SLAM stack
+runs in **ROS 2 Humble**.  Three options to bridge the gap:
+
+**Option A — `ros1_bridge` (recommended for initial testing):**
+```bash
+# Terminal 1 (ROS 1 side): start the Amiga mock server or real robot bridge
+source ~/catkin_ws/devel/setup.bash
+roslaunch amiga_ros_bridge amiga_ros_bridge.launch
+
+# Terminal 2: start ros1_bridge (dynamic bridge)
+source /opt/ros/noetic/setup.bash && source /opt/ros/humble/setup.bash
+ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
+```
+After this, `/amiga/vel` and `/amiga/cmd_vel` appear in ROS 2.
+
+**Option B — native ROS 2 gRPC client (future work):**
+Write a ROS 2 Python node using the farm-ng Python SDK (farm-ng-amiga) to talk
+directly to the Amiga's canbus gRPC service.  Topics and behaviour are identical.
+
+**Option C — farm-ng Amiga ROS 2 package (check farm-ng repo):**
+farm-ng may provide a native ROS 2 driver.  If available, it replaces the bridge entirely.
+
+Once `/amiga/vel` is live in ROS 2, the `amiga_odometry` node and `amiga_velocity_bridge`
+work transparently regardless of which bridging method is used.
+
+### Amiga Topics (ROS 2)
+
+| Topic | Type | Direction | Description |
+|-------|------|-----------|-------------|
+| `/amiga/vel` | `geometry_msgs/TwistStamped` | **subscribe** | Measured wheel velocity (linear.x, angular.z) |
+| `/amiga/cmd_vel` | `geometry_msgs/Twist` | **publish** | Velocity commands to drive the robot |
+| `/wheel_odom` | `nav_msgs/Odometry` | **publish** | Dead-reckoning odometry from `amiga_odometry` |
+| `/cmd_vel` | `geometry_msgs/Twist` | **subscribe** | From Nav2 / teleop; forwarded to `/amiga/cmd_vel` |
+| `/odometry/filtered` | `nav_msgs/Odometry` | **publish** | EKF-fused odometry (when use_ekf:=true) |
 
 ### RTAB-Map LiDAR-Only Mode
 By default, `rtabmap` and `rtabmap_viz` wait for camera topics (`/rgb/image`, `/depth/image`). For LiDAR-only operation, these params are required on both nodes:

@@ -3,15 +3,37 @@
 <package format="3">
   <name>amiga_bringup</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Bringup for Farm-ng Amiga SLAM stack (VLP-16 + RTAB-Map + odometry bridge)</description>
   <maintainer email="59524535+muneebelahimalik@users.noreply.github.com">muneebelahimalik</maintainer>
   <license>MIT</license>
 
+  <!-- Python test linters -->
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
+
+  <!-- Runtime: Python stdlib supplement -->
   <exec_depend>python3-yaml</exec_depend>
+
+  <!-- Runtime: ROS 2 message / TF dependencies for amiga nodes -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+
+  <!-- Runtime: sensor stack -->
+  <exec_depend>velodyne_driver</exec_depend>
+  <exec_depend>velodyne_pointcloud</exec_depend>
+
+  <!-- Runtime: SLAM stack -->
+  <exec_depend>rtabmap_odom</exec_depend>
+  <exec_depend>rtabmap_slam</exec_depend>
+  <exec_depend>rtabmap_viz</exec_depend>
+
+  <!-- Runtime: optional EKF fusion -->
+  <exec_depend>robot_localization</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>
