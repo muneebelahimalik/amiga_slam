@@ -1,69 +1,50 @@
 #!/usr/bin/env python3
 """
-amiga_ros2_bridge.py — native ROS 2 / farm-ng gRPC bridge (no ROS 1 required).
+amiga_ros2_bridge.py — native ROS 2 / farm-ng gRPC bridge.
 
-Connects directly to the Amiga's gRPC services over Tailscale (or LAN) using
-the farm-ng Python SDK — the same SDK used by filter_client.py.
+Compatible with Amiga OS 2.0 (Barley) and farm-ng-core/farm-ng-amiga >= 2.0.0.
+Uses the EventClient subscribe + request_reply pattern as shown in the
+official farm-ng virtual-joystick / pose_generator examples.
 
-This node REPLACES the ROS 1 amiga_ros_bridge + ros1_bridge combination.
+INSTALLATION (run once, before building the ROS 2 workspace):
+    pip3 install farm-ng-amiga farm-ng-core
+    # farm-ng must be in the SAME Python that ROS 2 uses (system Python,
+    # NOT a venv).  Verify with:  python3 -c "import farm_ng; print('ok')"
 
 Published topics
 ----------------
 /amiga/vel   (geometry_msgs/TwistStamped)
-    Measured wheel velocity from the Amiga canbus service.
+    Measured wheel velocity from the canbus service (AmigaTpdo1).
     Consumed by amiga_odometry → /wheel_odom for SLAM.
 
-/amiga/pose  (nav_msgs/Odometry, header.frame_id="world")
-    Filter state from the Amiga's on-board state estimator (GPS + IMU).
-    Only published when has_converged is true.  Coordinates are in the
-    filter's "world" frame (typically UTM-based; origin at first fix).
-    In the lab this may never publish due to weak GPS — that is expected.
+/amiga/pose  (nav_msgs/Odometry, frame_id="world")
+    Filter state (GPS + IMU).  Only published when has_converged=true
+    (or when publish_unconverged_filter:=true for lab debugging).
+    The x/y coordinates are in the filter's world frame (UTM-based).
 
 Subscribed topics
 -----------------
 /cmd_vel  (geometry_msgs/Twist)
-    Velocity commands from Nav2 or teleop.  Forwarded to the Amiga canbus
-    service as AmigaRpdo1 (cmd_speed, cmd_angular_rate).
+    Velocity commands (from Nav2 / teleop) forwarded to the Amiga as
+    Twist2d via canbus request_reply("/twist", ...) at the canbus rate.
 
 ROS 2 parameters
 ----------------
-host          (str,   default 'camphor-clone.tail0be07.ts.net')
-    Tailscale hostname or IP of the Amiga brain.
+host                      (str,   default 'camphor-clone.tail0be07.ts.net')
+canbus_port               (int,   default 6001)
+filter_port               (int,   default 20001)
+max_linear                (float, default 1.5)   m/s clamp
+max_angular               (float, default 1.0)   rad/s clamp
+publish_unconverged_filter (bool,  default false)
 
-canbus_port   (int,   default 6001)
-    gRPC port of the Amiga canbus service.
-
-filter_port   (int,   default 20001)
-    gRPC port of the Amiga filter (state estimation) service.
-
-max_linear    (float, default 1.5)
-    Hard clamp on commanded |linear.x| (m/s).
-
-max_angular   (float, default 1.0)
-    Hard clamp on commanded |angular.z| (rad/s).
-
-publish_unconverged_filter (bool, default false)
-    When true, also publish /amiga/pose when GPS has not converged.
-    Useful for debugging; leave false in production.
-
-Architecture
-------------
-asyncio runs in a daemon thread alongside rclpy.spin().
-
-  background thread (asyncio)
-    ├── _subscribe_canbus()  →  self._vel_pub.publish()
-    ├── _subscribe_filter()  →  self._pose_pub.publish()
-    └── _send_commands()     ←  self._cmd_queue (fed by /cmd_vel subscriber)
-
-  main thread (rclpy.spin)
-    └── /cmd_vel subscriber  →  self._cmd_queue
-
-Velocity command note
----------------------
-Commands are sent to the canbus gRPC service as AmigaRpdo1 messages.
-The exact gRPC service stub method depends on the farm-ng SDK version
-installed on this machine.  If command sending fails (logs a warning),
-check the farm-ng canbus service proto and adjust _send_commands() below.
+OS 2.0 API notes
+----------------
+• AmigaTpdo1 is now in farm_ng.canbus.packet (not canbus_pb2).
+• Canbus messages must be decoded manually:
+    subscribe(..., decode=False)  →  payload_to_protobuf(event, payload)
+    →  AmigaTpdo1.from_proto(message.amiga_tpdo1)
+• Velocity commands use Twist2d via EventClient.request_reply("/twist", twist).
+  No raw gRPC stub needed.
 """
 
 from __future__ import annotations
@@ -79,39 +60,56 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, TwistStamped
 from nav_msgs.msg import Odometry
 
+# ---------------------------------------------------------------------------
+# farm-ng SDK imports — OS 2.0 (Barley) layout
+# ---------------------------------------------------------------------------
 try:
+    from farm_ng.canbus.packet import AmigaTpdo1, Twist2d
     from farm_ng.core.event_client import EventClient
     from farm_ng.core.event_service_pb2 import EventServiceConfig, SubscribeRequest
+    from farm_ng.core.uri_pb2 import Uri
     from google.protobuf import json_format
-    _FARM_NG_CORE = True
-except ImportError:
-    _FARM_NG_CORE = False
+    _SDK_OK = True
+except ImportError as _sdk_err:
+    _SDK_OK = False
+    _sdk_err_msg = str(_sdk_err)
 
-try:
-    from farm_ng.canbus.canbus_pb2 import AmigaTpdo1, AmigaRpdo1
-    _FARM_NG_CANBUS = True
-except ImportError:
-    _FARM_NG_CANBUS = False
+# payload_to_protobuf location varies slightly across SDK patch versions
+_payload_to_proto = None
+if _SDK_OK:
+    try:
+        from farm_ng.core.events_file_reader import payload_to_protobuf as _p
+        _payload_to_proto = _p
+    except ImportError:
+        pass
+    if _payload_to_proto is None:
+        try:
+            from farm_ng.core.event_client import payload_to_protobuf as _p
+            _payload_to_proto = _p
+        except ImportError:
+            pass
 
+# farm_ng_core_pybind is optional (used for filter state pose)
 try:
     from farm_ng_core_pybind import Pose3F64
-    _FARM_NG_PYBIND = True
+    _PYBIND_OK = True
 except ImportError:
-    _FARM_NG_PYBIND = False
+    _PYBIND_OK = False
 
 
-def _make_event_service_config(name: str, host: str, port: int,
-                                path: str, query: str) -> 'EventServiceConfig':
-    """Build EventServiceConfig from parameters (same JSON structure as service_config.json)."""
-    config_dict = {
-        'name': name,
-        'host': host,
-        'port': port,
-        'subscriptions': [
-            {'uri': {'path': path, 'query': query}, 'every_n': 1}
-        ],
-    }
-    return json_format.ParseDict(config_dict, EventServiceConfig())
+def _make_config(name: str, host: str, port: int, path: str, query: str) -> 'EventServiceConfig':
+    """Build EventServiceConfig matching the service_config.json JSON format."""
+    return json_format.ParseDict(
+        {
+            'name': name,
+            'host': host,
+            'port': port,
+            'subscriptions': [
+                {'uri': {'path': path, 'query': query}, 'every_n': 1}
+            ],
+        },
+        EventServiceConfig(),
+    )
 
 
 class AmigaRos2Bridge(Node):
@@ -119,13 +117,20 @@ class AmigaRos2Bridge(Node):
     def __init__(self):
         super().__init__('amiga_ros2_bridge')
 
-        if not _FARM_NG_CORE:
+        if not _SDK_OK:
             self.get_logger().fatal(
-                'farm-ng Python SDK not found.  Install with:\n'
-                '  pip install farm-ng-amiga\n'
-                'or follow https://github.com/farm-ng/amiga-dev-kit instructions.'
+                f'farm-ng Python SDK not found ({_sdk_err_msg}).\n'
+                'Install in the system Python used by ROS 2 (NOT a venv):\n'
+                '    pip3 install farm-ng-amiga farm-ng-core\n'
+                'Then rebuild:  colcon build --symlink-install'
             )
-            raise RuntimeError('farm_ng not installed')
+            raise RuntimeError('farm_ng SDK not installed in ROS 2 Python environment')
+
+        if _payload_to_proto is None:
+            self.get_logger().warn(
+                'payload_to_protobuf not found in farm_ng SDK — '
+                'canbus messages may not decode correctly.'
+            )
 
         # ---- parameters ----
         self.declare_parameter('host', 'camphor-clone.tail0be07.ts.net')
@@ -146,30 +151,33 @@ class AmigaRos2Bridge(Node):
         self._vel_pub = self.create_publisher(TwistStamped, '/amiga/vel', 10)
         self._pose_pub = self.create_publisher(Odometry, '/amiga/pose', 10)
 
-        # ---- velocity command queue (thread-safe, ROS → asyncio) ----
-        self._cmd_queue: queue.Queue[Optional[Twist]] = queue.Queue(maxsize=5)
+        # ---- cmd_vel: latest command stored for injection into canbus loop ----
+        self._last_cmd: Optional[Twist] = None
+        self._cmd_lock = threading.Lock()
         self.create_subscription(Twist, '/cmd_vel', self._cmd_cb, 10)
 
         self.get_logger().info(
-            f'amiga_ros2_bridge connecting to {self._host} '
+            f'amiga_ros2_bridge: connecting to {self._host} '
             f'(canbus:{self._canbus_port}, filter:{self._filter_port})'
         )
 
         # ---- asyncio in background daemon thread ----
         self._loop = asyncio.new_event_loop()
-        self._bg_thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._bg_thread.start()
+        self._bg = threading.Thread(target=self._run_loop, daemon=True)
+        self._bg.start()
 
     # ------------------------------------------------------------------
-    # ROS 2 callbacks (main thread)
+    # ROS 2 subscriber (main thread)
     # ------------------------------------------------------------------
 
     def _cmd_cb(self, msg: Twist) -> None:
-        """Put /cmd_vel in queue; async sender picks it up at 10 Hz."""
-        try:
-            self._cmd_queue.put_nowait(msg)
-        except queue.Full:
-            pass  # drop old command if queue is full
+        with self._cmd_lock:
+            self._last_cmd = msg
+
+    def _get_cmd(self) -> Twist:
+        """Return latest /cmd_vel command (thread-safe), or zero Twist."""
+        with self._cmd_lock:
+            return self._last_cmd if self._last_cmd is not None else Twist()
 
     # ------------------------------------------------------------------
     # Asyncio loop (background thread)
@@ -181,64 +189,85 @@ class AmigaRos2Bridge(Node):
 
     async def _async_main(self) -> None:
         tasks = [
-            asyncio.create_task(self._subscribe_canbus()),
-            asyncio.create_task(self._subscribe_filter()),
-            asyncio.create_task(self._send_commands()),
+            asyncio.create_task(self._run_canbus()),
+            asyncio.create_task(self._run_filter()),
         ]
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
-        for task in pending:
-            task.cancel()
-        for task in done:
-            exc = task.exception()
-            if exc:
-                self.get_logger().error(f'Async task error: {exc}')
+        for t in pending:
+            t.cancel()
+        for t in done:
+            if not t.cancelled() and t.exception():
+                self.get_logger().error(f'async task raised: {t.exception()!r}')
 
     # ------------------------------------------------------------------
-    # Canbus subscriber → /amiga/vel
+    # Canbus: read AmigaTpdo1 → /amiga/vel  AND  send Twist2d commands
+    #
+    # Pattern mirrors farm-ng pose_generator example:
+    #   subscribe(decode=False) → payload_to_protobuf → AmigaTpdo1.from_proto
+    #   request_reply("/twist", Twist2d(...)) — within the same loop
     # ------------------------------------------------------------------
 
-    async def _subscribe_canbus(self) -> None:
-        """Read AmigaTpdo1 from canbus service, publish /amiga/vel."""
-        if not _FARM_NG_CANBUS:
-            self.get_logger().warn(
-                'farm_ng.canbus not available — /amiga/vel will NOT be published.'
-            )
-            return
-
-        config = _make_event_service_config(
+    async def _run_canbus(self) -> None:
+        config = _make_config(
             'canbus', self._host, self._canbus_port,
             '/state', 'service_name=canbus',
+        )
+        sub_req = SubscribeRequest(
+            uri=Uri(path='/state', query='service_name=canbus'),
+            every_n=1,
         )
 
         while rclpy.ok():
             try:
                 self.get_logger().info('Connecting to canbus service…')
-                async for event, message in EventClient(config).subscribe(
-                    config.subscriptions[0], decode=True
-                ):
-                    if not isinstance(message, AmigaTpdo1):
-                        continue
+                client = EventClient(config)
 
-                    msg = TwistStamped()
-                    msg.header.stamp = self.get_clock().now().to_msg()
-                    msg.header.frame_id = 'base_link'
-                    msg.twist.linear.x = float(message.measured_speed)
-                    msg.twist.angular.z = float(message.measured_angular_rate)
-                    self._vel_pub.publish(msg)
+                async for event, payload in client.subscribe(sub_req, decode=False):
+
+                    # ---- decode state ----
+                    if _payload_to_proto is not None:
+                        message = _payload_to_proto(event, payload)
+                        tpdo1 = AmigaTpdo1.from_proto(message.amiga_tpdo1)
+                    else:
+                        # Fallback: try direct decode (may work on some SDK versions)
+                        tpdo1 = AmigaTpdo1.from_proto(payload)
+
+                    # ---- publish /amiga/vel ----
+                    vel_msg = TwistStamped()
+                    vel_msg.header.stamp = self.get_clock().now().to_msg()
+                    vel_msg.header.frame_id = 'base_link'
+                    vel_msg.twist.linear.x = float(tpdo1.measured_speed)
+                    vel_msg.twist.angular.z = float(tpdo1.measured_angular_rate)
+                    self._vel_pub.publish(vel_msg)
+
+                    # ---- forward velocity command to Amiga ----
+                    cmd = self._get_cmd()
+                    twist = Twist2d()
+                    twist.linear_velocity_x = max(
+                        -self._max_lin, min(self._max_lin, cmd.linear.x)
+                    )
+                    twist.angular_velocity = max(
+                        -self._max_ang, min(self._max_ang, cmd.angular.z)
+                    )
+                    try:
+                        await client.request_reply('/twist', twist)
+                    except Exception as cmd_exc:
+                        self.get_logger().debug(
+                            f'request_reply /twist failed: {cmd_exc!r}'
+                        )
 
             except Exception as exc:
                 self.get_logger().warn(
-                    f'canbus subscribe error: {exc!r}  — retrying in 3 s'
+                    f'canbus error: {exc!r}  — retrying in 3 s'
                 )
                 await asyncio.sleep(3.0)
 
     # ------------------------------------------------------------------
-    # Filter subscriber → /amiga/pose
+    # Filter: read FilterState → /amiga/pose  (GPS, when converged)
     # ------------------------------------------------------------------
 
-    async def _subscribe_filter(self) -> None:
-        """Read FilterState from filter service, publish /amiga/pose."""
-        config = _make_event_service_config(
+    async def _run_filter(self) -> None:
+        config = _make_config(
             'filter', self._host, self._filter_port,
             '/state', 'service_name=filter',
         )
@@ -250,15 +279,14 @@ class AmigaRos2Bridge(Node):
                     config.subscriptions[0], decode=True
                 ):
                     if not message.has_converged and not self._pub_unconverged:
-                        continue  # skip unconverged estimates in production
+                        continue
 
                     odom = Odometry()
                     odom.header.stamp = self.get_clock().now().to_msg()
-                    # "world" frame = filter's global reference (UTM-based)
                     odom.header.frame_id = 'world'
                     odom.child_frame_id = 'robot'
 
-                    if _FARM_NG_PYBIND:
+                    if _PYBIND_OK:
                         pose = Pose3F64.from_proto(message.pose)
                         odom.pose.pose.position.x = pose.translation[0]
                         odom.pose.pose.position.y = pose.translation[1]
@@ -266,117 +294,29 @@ class AmigaRos2Bridge(Node):
                             pose.translation[2] if len(pose.translation) > 2 else 0.0
                         )
                     else:
-                        # Fallback: read pose fields directly from proto if pybind not installed
-                        odom.pose.pose.position.x = message.pose.translation.x \
-                            if hasattr(message.pose, 'translation') else 0.0
-                        odom.pose.pose.position.y = message.pose.translation.y \
-                            if hasattr(message.pose, 'translation') else 0.0
+                        # proto-direct fallback (field names may vary)
+                        t = getattr(message.pose, 'translation', None)
+                        if t is not None:
+                            odom.pose.pose.position.x = getattr(t, 'x', 0.0)
+                            odom.pose.pose.position.y = getattr(t, 'y', 0.0)
 
-                    # Heading → quaternion (heading is yaw in radians)
                     h = message.heading
                     odom.pose.pose.orientation.z = math.sin(h * 0.5)
                     odom.pose.pose.orientation.w = math.cos(h * 0.5)
 
-                    # Covariance from filter uncertainty diagonal [x, y, heading]
                     unc = message.uncertainty_diagonal
                     if unc and len(unc.data) >= 3:
-                        odom.pose.covariance[0] = unc.data[0] ** 2   # xx
-                        odom.pose.covariance[7] = unc.data[1] ** 2   # yy
-                        odom.pose.covariance[35] = unc.data[2] ** 2  # yawyaw
+                        odom.pose.covariance[0] = unc.data[0] ** 2
+                        odom.pose.covariance[7] = unc.data[1] ** 2
+                        odom.pose.covariance[35] = unc.data[2] ** 2
 
                     self._pose_pub.publish(odom)
 
             except Exception as exc:
                 self.get_logger().warn(
-                    f'filter subscribe error: {exc!r}  — retrying in 3 s'
+                    f'filter error: {exc!r}  — retrying in 3 s'
                 )
                 await asyncio.sleep(3.0)
-
-    # ------------------------------------------------------------------
-    # Velocity command sender: /cmd_vel → Amiga canbus
-    # ------------------------------------------------------------------
-
-    async def _send_commands(self) -> None:
-        """
-        Drain the cmd_queue at 10 Hz and forward commands to the Amiga
-        canbus service as AmigaRpdo1 messages.
-
-        Command sending uses grpc.aio directly since EventClient is designed
-        primarily for subscribe streaming.  If the CanbusService stub method
-        name differs in your farm-ng SDK version, adjust the call below.
-        """
-        if not _FARM_NG_CANBUS:
-            self.get_logger().warn(
-                'farm_ng.canbus not available — /cmd_vel commands will NOT be sent.'
-            )
-            return
-
-        try:
-            import grpc.aio as aio
-            from farm_ng.canbus import canbus_service_pb2_grpc
-            _grpc_available = True
-        except ImportError:
-            self.get_logger().warn(
-                'grpc.aio or canbus service stub not available — '
-                'velocity commands will be logged but not forwarded.'
-            )
-            _grpc_available = False
-
-        channel = None
-        stub = None
-        last_cmd = Twist()          # default: zero velocity
-        send_interval = 0.1         # 10 Hz command rate
-
-        while rclpy.ok():
-            await asyncio.sleep(send_interval)
-
-            # Pull latest command from queue (skip stale ones)
-            while not self._cmd_queue.empty():
-                try:
-                    last_cmd = self._cmd_queue.get_nowait()
-                except queue.Empty:
-                    break
-
-            # Clamp velocities
-            lin = max(-self._max_lin, min(self._max_lin, last_cmd.linear.x))
-            ang = max(-self._max_ang, min(self._max_ang, last_cmd.angular.z))
-
-            if not _grpc_available:
-                if lin != 0.0 or ang != 0.0:
-                    self.get_logger().debug(
-                        f'cmd_vel (not forwarded): linear={lin:.2f} angular={ang:.2f}'
-                    )
-                continue
-
-            # Lazy-init gRPC channel
-            if channel is None:
-                try:
-                    channel = aio.insecure_channel(f'{self._host}:{self._canbus_port}')
-                    stub = canbus_service_pb2_grpc.CanbusServiceStub(channel)
-                    self.get_logger().info(
-                        f'canbus command channel opened to {self._host}:{self._canbus_port}'
-                    )
-                except Exception as exc:
-                    self.get_logger().warn(f'Failed to open canbus command channel: {exc!r}')
-                    channel = None
-                    continue
-
-            # Send AmigaRpdo1 command
-            try:
-                rpdo = AmigaRpdo1(cmd_speed=lin, cmd_angular_rate=ang)
-                await stub.send(rpdo)
-            except Exception as exc:
-                self.get_logger().warn(
-                    f'canbus command send failed: {exc!r}  '
-                    '(check canbus_service_pb2_grpc.CanbusServiceStub.send() API)'
-                )
-                # Reset channel so it reconnects on next iteration
-                try:
-                    await channel.close()
-                except Exception:
-                    pass
-                channel = None
-                stub = None
 
 
 def main(args=None) -> None:
@@ -385,7 +325,6 @@ def main(args=None) -> None:
         node = AmigaRos2Bridge()
         rclpy.spin(node)
     except RuntimeError as exc:
-        # Node raised during __init__ (e.g. missing SDK)
         rclpy.logging.get_logger('amiga_ros2_bridge').fatal(str(exc))
     except KeyboardInterrupt:
         pass

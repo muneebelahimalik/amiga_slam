@@ -179,6 +179,13 @@ runs in **ROS 2 Humble**.  Three options to bridge the gap:
 The `amiga_ros2_bridge` node connects directly to the Amiga's gRPC services
 over Tailscale using the farm-ng Python SDK — the same SDK used by filter_client.py.
 
+**IMPORTANT: Install farm-ng in the system Python BEFORE building (run once):**
+```bash
+bash ~/amiga_slam/scripts/install_farmng.sh
+# Installs farm-ng-amiga + farm-ng-core into the Python ROS 2 uses.
+# Do NOT use a venv — ROS 2 nodes cannot see venv-installed packages.
+```
+
 ```bash
 # Start the bridge (Tailscale must be active)
 ros2 launch amiga_bringup amiga_grpc_bridge.launch.py
@@ -201,6 +208,16 @@ python3 main.py --service-config ~/amiga_slam/config/service_configs/filter_conf
 # Test canbus service (new):
 # (use a similar EventClient subscriber script, or check AmigaTpdo1 messages)
 ```
+
+### Amiga OS 2.0 (Barley) SDK API notes
+
+The bridge uses OS 2.0 patterns (farm-ng-core/amiga >= 2.0.0):
+- `AmigaTpdo1` and `Twist2d` live in `farm_ng.canbus.packet` (not `canbus_pb2`)
+- Canbus subscription: `decode=False` → `payload_to_protobuf(event, payload)`
+  → `AmigaTpdo1.from_proto(message.amiga_tpdo1)`
+- Velocity commands: `await client.request_reply("/twist", Twist2d(...))` within
+  the subscribe loop — no raw gRPC stub needed (matches `pose_generator` pattern)
+- Filter subscription: unchanged `decode=True` (same as filter_client.py)
 
 ### Amiga Topics (ROS 2)
 
