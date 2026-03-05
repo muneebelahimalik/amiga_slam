@@ -30,7 +30,12 @@ bash scripts/run_live.sh
 ros2 launch amiga_bringup sensors_live.launch.py
 ```
 
-**Run SLAM (requires sensors running first):**
+**Run live sensors + SLAM together (all-in-one):**
+```bash
+ros2 launch amiga_bringup slam_live.launch.py
+```
+
+**Run SLAM only (sensors already running separately):**
 ```bash
 ros2 launch amiga_bringup slam_rtabmap_lidar3d.launch.py
 ```
@@ -68,6 +73,7 @@ map
 ### Key Files
 - `src/amiga_bringup/launch/sensors_live.launch.py` — top-level live sensor launch (includes `velodyne_vlp16.launch.py` + `tf_static_base_to_velodyne.launch.py`)
 - `src/amiga_bringup/launch/slam_rtabmap_lidar3d.launch.py` — SLAM stack (ICP odom + rtabmap + viz); args `use_sim_time` and `cloud_topic`
+- `src/amiga_bringup/launch/slam_live.launch.py` — live all-in-one: VLP-16 driver + static TF + SLAM (`use_sim_time=false`)
 - `src/amiga_bringup/launch/slam_bag_replay.launch.py` — bag replay + static TF + SLAM in one launch; `use_sim_time` is hardcoded true; bag starts after a 3s delay so SLAM nodes are ready
 - `src/amiga_bringup/config/velodyne_transform.yaml` — VLP-16 pointcloud conversion params (range, organization, FOV)
 - `src/amiga_bringup/urdf/amiga_min.urdf` — minimal URDF with only `base_link` and `velodyne` links
