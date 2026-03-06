@@ -183,14 +183,16 @@ Amiga brain (Tailscale: camphor-clone.tail0be07.ts.net)
 - `src/amiga_bringup/amiga_bringup/amiga_ros2_bridge.py` — gRPC bridge (OS 2.0); publishes `/amiga/vel`, `/amiga/pose`; forwards `/cmd_vel`
 - `src/amiga_bringup/amiga_bringup/amiga_odometry.py` — wheel odometry
 - `src/amiga_bringup/amiga_bringup/amiga_velocity_bridge.py` — fallback cmd_vel relay
-- `src/amiga_bringup/amiga_bringup/field_coverage_planner.py` — boustrophedon coverage planner; `~/start_coverage` / `~/stop_coverage` services; publishes `~/coverage_path` (Path)
+- `src/amiga_bringup/amiga_bringup/autonomous_row_coverage.py` — **NO POLYGON NEEDED**: starts from current pose, learns row length optionally via `~/mark_row_end`, drives all rows with SLAM mapping simultaneously; `~/start` / `~/stop` / `~/mark_row_end` services
+- `src/amiga_bringup/amiga_bringup/field_coverage_planner.py` — polygon-based boustrophedon planner (known map + field corners); `~/start_coverage` / `~/stop_coverage` services
 
 **Launch files (active):**
 - `src/amiga_bringup/launch/localize_nav.launch.py` — **PRODUCTION**: Amiga + VLP-16 + localization + Nav2
 - `src/amiga_bringup/launch/slam_nav.launch.py` — **NEW FIELD MAPPING**: SLAM + Nav2 combined
 - `src/amiga_bringup/launch/slam_full.launch.py` — Amiga + VLP-16 + SLAM (no Nav2, for manual/teleoperation)
 - `src/amiga_bringup/launch/nav2.launch.py` — Nav2 only (attach to running SLAM)
-- `src/amiga_bringup/launch/field_coverage.launch.py` — coverage planner node (attach to running Nav2)
+- `src/amiga_bringup/launch/autonomous_coverage.launch.py` — **ALL-IN-ONE**: Amiga + VLP-16 + SLAM + Nav2 + autonomous row coverage (no prior map needed)
+- `src/amiga_bringup/launch/field_coverage.launch.py` — polygon-based coverage planner node (attach to running Nav2 + localization)
 - `src/amiga_bringup/launch/slam_localization.launch.py` — RTAB-Map localization only
 - `src/amiga_bringup/launch/amiga_grpc_bridge.launch.py` — gRPC bridge only
 - `src/amiga_bringup/launch/amiga_bringup_nodes.launch.py` — odometry + velocity bridge (+ optional EKF)
@@ -327,9 +329,67 @@ A bare filename or empty string crashes the node.
 
 ---
 
-## Field Coverage Planner
+## Autonomous Row Coverage (no prior map needed)
 
-Generates a boustrophedon (back-and-forth) waypoint pattern and sends it to Nav2's `/follow_waypoints` action for systematic field coverage.
+`autonomous_row_coverage.py` — place the robot at the start of row 0, call `~/start`, and the robot drives all rows automatically while building the field map with SLAM.
+
+**One-terminal launch:**
+```bash
+# Known row length (most common — measure once with a tape):
+ros2 launch amiga_bringup autonomous_coverage.launch.py \
+    row_length:=45.0 num_rows:=22 row_spacing:=0.45 rviz:=true
+
+# Unknown row length — robot learns it on the first pass:
+ros2 launch amiga_bringup autonomous_coverage.launch.py \
+    row_length:=0.0 num_rows:=22 rviz:=true
+```
+
+**Trigger (once stack is live):**
+```bash
+# Known row_length: starts immediately
+ros2 service call /autonomous_row_coverage/start std_srvs/srv/Trigger {}
+
+# Unknown row_length: start driving, then mark end when you get there
+ros2 service call /autonomous_row_coverage/start std_srvs/srv/Trigger {}
+# (walk to row end, then:)
+ros2 service call /autonomous_row_coverage/mark_row_end std_srvs/srv/Trigger {}
+
+# Emergency stop:
+ros2 service call /autonomous_row_coverage/stop std_srvs/srv/Trigger {}
+```
+
+**After coverage is done, save the map:**
+```bash
+bash scripts/save_map.sh ~/maps/field
+```
+
+**Key parameters:**
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `row_length` | 0.0 | Row length in metres (0 = learn via `~/mark_row_end`) |
+| `num_rows` | 20 | Number of rows to cover |
+| `row_spacing` | 0.45 m | Distance between rows |
+| `buffer_distance` | 1.5 m | Past crop edge before turning |
+
+**RViz2 displays to add:**
+- `Path` → `/autonomous_row_coverage/coverage_path` — full planned route
+- `Int32` → `/autonomous_row_coverage/current_row` — live row counter
+
+**End-of-row maneuver** (matches farm-ng `end_of_row_maneuver.py` pattern):
+```
+  ════════════════════► ──► buf
+  row i                     ↓ row_spacing
+  ◄════════════════════ ◄── buf
+  row i+1
+```
+Buffer drives past the crop edge, robot crosses the row spacing, then drives back to align with the next row edge. Stacks rows to the LEFT of the initial heading.
+
+---
+
+## Field Coverage Planner (polygon-based, known map)
+
+`field_coverage_planner.py` — use when you already have a map and know the field polygon corners. Generates a boustrophedon pattern from the polygon and sends it to Nav2's `/follow_waypoints` action.
 
 **Workflow:**
 1. Build and save a map with `slam_nav.launch.py`.
