@@ -367,10 +367,30 @@ bash scripts/save_map.sh ~/maps/field
 
 | Parameter | Default | Notes |
 |---|---|---|
-| `row_length` | 0.0 | Row length in metres (0 = learn via `~/mark_row_end`) |
+| `row_length` | 0.0 | Row length in metres (0 = auto-detect via LiDAR) |
 | `num_rows` | 20 | Number of rows to cover |
 | `row_spacing` | 0.45 m | Distance between rows |
 | `buffer_distance` | 1.5 m | Past crop edge before turning |
+| `row_end_threshold` | 5 | LiDAR returns/scan below this = end of row |
+| `row_end_confirm_scans` | 4 | Consecutive low-density scans to confirm row end |
+| `row_end_min_dist` | 3.0 m | Min distance driven before row-end detector arms |
+| `obstacle_stop_dist` | 1.5 m | Depth of forward safety zone |
+| `obstacle_clear_secs` | 3.0 s | Seconds clear before resuming after obstacle |
+| `obstacle_threshold` | 3 | Points in safety zone = obstacle present |
+
+**LiDAR detection zones (both in base_link frame):**
+
+```
+  Safety zone (obstacle stop-and-wait):
+    x: 0.15 → 1.5 m ahead   (within obstacle_stop_dist)
+    y: ±0.55 m               (robot half-width + 9 cm margin)
+    z: 0.10 → 2.0 m          (human/equipment height, ignores ground)
+
+  Crop density zone (row-end detection):
+    x: 1.0 → 4.0 m ahead    (avoids immediate-proximity noise)
+    y: ±2.0 m                (catches crop on both sides of robot)
+    z: 0.0 → 1.5 m           (ground to above canopy)
+```
 
 **RViz2 displays to add:**
 - `Path` → `/autonomous_row_coverage/coverage_path` — full planned route
