@@ -183,12 +183,14 @@ Amiga brain (Tailscale: camphor-clone.tail0be07.ts.net)
 - `src/amiga_bringup/amiga_bringup/amiga_ros2_bridge.py` — gRPC bridge (OS 2.0); publishes `/amiga/vel`, `/amiga/pose`; forwards `/cmd_vel`
 - `src/amiga_bringup/amiga_bringup/amiga_odometry.py` — wheel odometry
 - `src/amiga_bringup/amiga_bringup/amiga_velocity_bridge.py` — fallback cmd_vel relay
+- `src/amiga_bringup/amiga_bringup/field_coverage_planner.py` — boustrophedon coverage planner; `~/start_coverage` / `~/stop_coverage` services; publishes `~/coverage_path` (Path)
 
 **Launch files (active):**
 - `src/amiga_bringup/launch/localize_nav.launch.py` — **PRODUCTION**: Amiga + VLP-16 + localization + Nav2
 - `src/amiga_bringup/launch/slam_nav.launch.py` — **NEW FIELD MAPPING**: SLAM + Nav2 combined
 - `src/amiga_bringup/launch/slam_full.launch.py` — Amiga + VLP-16 + SLAM (no Nav2, for manual/teleoperation)
 - `src/amiga_bringup/launch/nav2.launch.py` — Nav2 only (attach to running SLAM)
+- `src/amiga_bringup/launch/field_coverage.launch.py` — coverage planner node (attach to running Nav2)
 - `src/amiga_bringup/launch/slam_localization.launch.py` — RTAB-Map localization only
 - `src/amiga_bringup/launch/amiga_grpc_bridge.launch.py` — gRPC bridge only
 - `src/amiga_bringup/launch/amiga_bringup_nodes.launch.py` — odometry + velocity bridge (+ optional EKF)
@@ -199,6 +201,7 @@ Amiga brain (Tailscale: camphor-clone.tail0be07.ts.net)
 
 **Config:**
 - `src/amiga_bringup/config/nav2_params.yaml` — Nav2: DWB controller, NavFn planner, costmaps, behaviors; tuned for 1.10×0.93 m outdoor robot
+- `src/amiga_bringup/config/field_coverage.yaml` — field polygon corners, row spacing, heading for weed control coverage
 - `src/amiga_bringup/config/ekf.yaml` — robot_localization EKF (ICP + wheel odom fusion)
 - `src/amiga_bringup/config/velodyne_transform.yaml` — VLP-16 pointcloud params
 - `config/service_configs/canbus_config.json` — canbus gRPC service config (port 6001)
@@ -321,6 +324,44 @@ Since `config/nav2_params.yaml` is installed with `--symlink-install`, edit it a
 calibration: /opt/ros/humble/share/velodyne_pointcloud/params/VLP16db.yaml
 ```
 A bare filename or empty string crashes the node.
+
+---
+
+## Field Coverage Planner
+
+Generates a boustrophedon (back-and-forth) waypoint pattern and sends it to Nav2's `/follow_waypoints` action for systematic field coverage.
+
+**Workflow:**
+1. Build and save a map with `slam_nav.launch.py`.
+2. Note corner coordinates: in RViz2 use the "Publish Point" tool and read the `/clicked_point` topic to record each field corner in map frame.
+3. Edit `config/field_coverage.yaml` — set `field_corners`, `row_spacing`, `row_heading`.
+4. Launch the full autonomous stack + coverage planner:
+```bash
+# Terminal 1:
+ros2 launch amiga_bringup localize_nav.launch.py database_path:=~/maps/field.db
+
+# Terminal 2:
+ros2 launch amiga_bringup field_coverage.launch.py
+
+# Terminal 3 — trigger coverage:
+ros2 service call /field_coverage_planner/start_coverage std_srvs/srv/Trigger {}
+
+# Cancel at any time:
+ros2 service call /field_coverage_planner/stop_coverage std_srvs/srv/Trigger {}
+```
+
+**Key config parameters (`config/field_coverage.yaml`):**
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `field_corners` | 20×10 m rectangle | Flat list: `x0,y0, x1,y1, ...` in map frame |
+| `row_spacing` | 0.45 m | Distance between passes (set to onion bed pitch) |
+| `row_heading` | 0.0° | Direction rows run (degrees from map +X, CCW) |
+| `start_margin` | 0.5 m | Pulls row endpoints inward from boundary |
+
+**Visualisation:** Add a `Path` display in RViz2 subscribed to `/field_coverage_planner/coverage_path` to see the planned pattern before triggering.
+
+**Row spacing for onion fields:** typical onion beds are 2 rows at 22.5 cm → 45 cm per robot pass. The Amiga is 93 cm wide, giving slight overlap between adjacent passes.
 
 ---
 

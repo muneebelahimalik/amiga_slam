@@ -27,6 +27,7 @@ setup(
             'amiga_odometry = amiga_bringup.amiga_odometry:main',
             'amiga_velocity_bridge = amiga_bringup.amiga_velocity_bridge:main',
             'amiga_ros2_bridge = amiga_bringup.amiga_ros2_bridge:main',
+            'field_coverage_planner = amiga_bringup.field_coverage_planner:main',
         ],
     },
 )
