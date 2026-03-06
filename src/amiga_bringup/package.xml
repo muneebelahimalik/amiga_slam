@@ -15,6 +15,7 @@
 
   <!-- Runtime: Python stdlib supplement -->
   <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
 
   <!-- Runtime: ROS 2 message / TF dependencies for amiga nodes -->
   <exec_depend>rclpy</exec_depend>
