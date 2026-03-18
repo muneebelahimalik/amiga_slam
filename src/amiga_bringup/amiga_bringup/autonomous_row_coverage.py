@@ -340,9 +340,8 @@ class AutonomousRowCoverageNode(Node):
         self._obstacle_clr_secs = 0.0               # seconds the safety zone has been clear
 
         self.get_logger().info(
-            '\nAutonomousRowCoverage ready.'
-            '\n  row_length   = %.1f m  (0 = auto-detect via LiDAR)',
-            self.get_parameter('row_length').value,
+            f'\nAutonomousRowCoverage ready.'
+            f'\n  row_length   = {self.get_parameter("row_length").value:.1f} m  (0 = auto-detect via LiDAR)'
         )
 
     # ──────────────────────────────────────────────────────────────────────────
