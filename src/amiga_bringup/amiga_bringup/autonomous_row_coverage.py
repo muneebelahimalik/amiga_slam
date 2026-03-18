@@ -36,8 +36,9 @@ Call ~/start.  The robot drives itself.
 ROS 2 interface
 ───────────────
 Services:
-  ~/start        Trigger — begin coverage from current pose
-  ~/stop         Trigger — cancel immediately
+  ~/start          Trigger — begin coverage from current pose
+  ~/stop           Trigger — cancel immediately
+  ~/mark_row_end   Trigger — manually mark current position as row end (LEARNING mode only)
 
 Topics published:
   ~/coverage_path  nav_msgs/Path  — full planned route (updates after learning)
@@ -319,8 +320,9 @@ class AutonomousRowCoverageNode(Node):
         self._vel_pub  = self.create_publisher(Twist,  '/cmd_vel',        10)
 
         # ── Services ─────────────────────────────────────────────────────────
-        self.create_service(Trigger, '~/start', self._start_cb)
-        self.create_service(Trigger, '~/stop',  self._stop_cb)
+        self.create_service(Trigger, '~/start',        self._start_cb)
+        self.create_service(Trigger, '~/stop',         self._stop_cb)
+        self.create_service(Trigger, '~/mark_row_end', self._mark_row_end_cb)
 
         # ── LiDAR subscription ───────────────────────────────────────────────
         self.create_subscription(
@@ -524,6 +526,51 @@ class AutonomousRowCoverageNode(Node):
         self._state = _State.IDLE
         response.success = True
         response.message = 'Stopped.'
+        return response
+
+    def _mark_row_end_cb(self, request, response):
+        """
+        Manual row-end marker for LEARNING mode.
+
+        Call this service when you are standing at the end of row 0 to teach
+        the system the row length without relying on LiDAR density detection.
+        The robot will cancel its open-ended drive and begin the full coverage
+        plan using the measured distance as row_length.
+        """
+        if self._state != _State.LEARNING:
+            response.success = False
+            response.message = (
+                f'mark_row_end only valid in LEARNING state (current: {self._state}). '
+                'Call ~/start first with row_length:=0.'
+            )
+            return response
+
+        pose = self._get_pose()
+        if pose is None or self._learn_start is None:
+            response.success = False
+            response.message = 'Cannot read robot pose from TF.'
+            return response
+
+        learned_dist = math.hypot(
+            pose[0] - self._learn_start[0],
+            pose[1] - self._learn_start[1],
+        )
+        min_dist = self.get_parameter('row_end_min_dist').value
+        if learned_dist < min_dist:
+            response.success = False
+            response.message = (
+                f'Only {learned_dist:.2f} m from start — too short '
+                f'(minimum row_end_min_dist = {min_dist:.1f} m). '
+                'Drive further before marking row end.'
+            )
+            return response
+
+        self.get_logger().info(
+            f'Row end marked manually at {learned_dist:.2f} m from start.'
+        )
+        self._on_row_end_detected(pose, learned_dist)
+        response.success = True
+        response.message = f'Row end marked. Row length = {learned_dist:.2f} m. Starting coverage.'
         return response
 
     # ──────────────────────────────────────────────────────────────────────────
