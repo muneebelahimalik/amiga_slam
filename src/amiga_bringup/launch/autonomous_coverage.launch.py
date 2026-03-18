@@ -70,6 +70,14 @@ def generate_launch_description():
     row_spacing      = LaunchConfiguration('row_spacing')
     buffer_distance  = LaunchConfiguration('buffer_distance')
 
+    # --- LiDAR detection tuning ---
+    row_end_threshold     = LaunchConfiguration('row_end_threshold')
+    row_end_confirm_scans = LaunchConfiguration('row_end_confirm_scans')
+    row_end_min_dist      = LaunchConfiguration('row_end_min_dist')
+    obstacle_stop_dist    = LaunchConfiguration('obstacle_stop_dist')
+    obstacle_clear_secs   = LaunchConfiguration('obstacle_clear_secs')
+    obstacle_threshold    = LaunchConfiguration('obstacle_threshold')
+
     # --- Common parameters ---
     rviz             = LaunchConfiguration('rviz')
     database_path    = LaunchConfiguration('database_path')
@@ -138,13 +146,18 @@ def generate_launch_description():
         name='autonomous_row_coverage',
         output='screen',
         parameters=[{
-            'row_length':      row_length,
-            'num_rows':        num_rows,
-            'row_spacing':     row_spacing,
-            'buffer_distance': buffer_distance,
-            'nav_frame':       'map',
-            'map_frame':       'map',
-            'base_frame':      'base_link',
+            'row_length':             row_length,
+            'num_rows':               num_rows,
+            'row_spacing':            row_spacing,
+            'buffer_distance':        buffer_distance,
+            'row_end_threshold':      row_end_threshold,
+            'row_end_confirm_scans':  row_end_confirm_scans,
+            'row_end_min_dist':       row_end_min_dist,
+            'obstacle_stop_dist':     obstacle_stop_dist,
+            'obstacle_clear_secs':    obstacle_clear_secs,
+            'obstacle_threshold':     obstacle_threshold,
+            'nav_frame':              'map',
+            'base_frame':             'base_link',
         }],
     )
 
@@ -165,6 +178,31 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'buffer_distance', default_value='1.5',
             description='Metres past crop edge to drive before turning.',
+        ),
+        # LiDAR detection tuning
+        DeclareLaunchArgument(
+            'row_end_threshold', default_value='5',
+            description='LiDAR returns/scan below this threshold declares row end.',
+        ),
+        DeclareLaunchArgument(
+            'row_end_confirm_scans', default_value='4',
+            description='Consecutive low-density scans required to confirm row end.',
+        ),
+        DeclareLaunchArgument(
+            'row_end_min_dist', default_value='3.0',
+            description='Min metres driven before row-end detector activates.',
+        ),
+        DeclareLaunchArgument(
+            'obstacle_stop_dist', default_value='1.5',
+            description='Depth of forward safety zone (m) — robot stops when occupied.',
+        ),
+        DeclareLaunchArgument(
+            'obstacle_clear_secs', default_value='3.0',
+            description='Seconds safety zone must be clear before resuming after obstacle.',
+        ),
+        DeclareLaunchArgument(
+            'obstacle_threshold', default_value='3',
+            description='LiDAR points in safety zone counted as obstacle present.',
         ),
         # Stack parameters
         DeclareLaunchArgument(

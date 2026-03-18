@@ -179,27 +179,29 @@ def _make_pose(x: float, y: float, yaw: float, frame: str, stamp) -> PoseStamped
 # Boustrophedon waypoint generation
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _end_of_row_maneuver(x, y, heading, row_spacing, buf, frame, stamp):
+def _end_of_row_maneuver(x, y, heading, row_spacing, buf, lat_x0, lat_y0, frame, stamp):
     """
     Three waypoints that move the robot from the end of one row to the start
-    of the next, stacking rows to the LEFT of the incoming heading.
+    of the next, stacking rows to the LEFT of the INITIAL heading (yaw0).
 
         [row end] ──► buf ──► cross row_spacing ──► buf back = [next row start]
+
+    lat_x0, lat_y0: lateral unit vector computed from yaw0 (NOT from heading).
+    This is critical for odd rows where heading = yaw0+π — computing lat from
+    heading would point AWAY from the next row instead of toward it.
 
     The incoming heading reverses after the maneuver (boustrophedon).
     """
     fwd_x = math.cos(heading)
     fwd_y = math.sin(heading)
-    lat_x = -math.sin(heading)   # left of heading
-    lat_y =  math.cos(heading)
 
     # 1. Drive past the crop edge
     bx = x + buf * fwd_x
     by = y + buf * fwd_y
 
-    # 2. Cross to the next row (heading reverses)
-    cx = bx + row_spacing * lat_x
-    cy = by + row_spacing * lat_y
+    # 2. Cross to the next row using the fixed lateral direction from yaw0
+    cx = bx + row_spacing * lat_x0
+    cy = by + row_spacing * lat_y0
     next_heading = heading + math.pi
 
     # 3. Drive back to the field edge in the new (reversed) direction
@@ -253,7 +255,11 @@ def generate_coverage_waypoints(x0, y0, yaw0,
 
         if i < num_rows - 1:
             waypoints.extend(
-                _end_of_row_maneuver(end_x, end_y, heading, row_spacing, buf, frame, now)
+                _end_of_row_maneuver(
+                    end_x, end_y, heading, row_spacing, buf,
+                    lat_x, lat_y,   # fixed lateral direction from yaw0
+                    frame, now,
+                )
             )
 
     return waypoints
