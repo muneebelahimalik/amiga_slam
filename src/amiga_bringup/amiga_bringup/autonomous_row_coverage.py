@@ -36,8 +36,9 @@ Call ~/start.  The robot drives itself.
 ROS 2 interface
 ───────────────
 Services:
-  ~/start        Trigger — begin coverage from current pose
-  ~/stop         Trigger — cancel immediately
+  ~/start          Trigger — begin coverage from current pose
+  ~/stop           Trigger — cancel immediately
+  ~/mark_row_end   Trigger — manually mark current position as row end (LEARNING mode only)
 
 Topics published:
   ~/coverage_path  nav_msgs/Path  — full planned route (updates after learning)
@@ -179,27 +180,29 @@ def _make_pose(x: float, y: float, yaw: float, frame: str, stamp) -> PoseStamped
 # Boustrophedon waypoint generation
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _end_of_row_maneuver(x, y, heading, row_spacing, buf, frame, stamp):
+def _end_of_row_maneuver(x, y, heading, row_spacing, buf, lat_x0, lat_y0, frame, stamp):
     """
     Three waypoints that move the robot from the end of one row to the start
-    of the next, stacking rows to the LEFT of the incoming heading.
+    of the next, stacking rows to the LEFT of the INITIAL heading (yaw0).
 
         [row end] ──► buf ──► cross row_spacing ──► buf back = [next row start]
+
+    lat_x0, lat_y0: lateral unit vector computed from yaw0 (NOT from heading).
+    This is critical for odd rows where heading = yaw0+π — computing lat from
+    heading would point AWAY from the next row instead of toward it.
 
     The incoming heading reverses after the maneuver (boustrophedon).
     """
     fwd_x = math.cos(heading)
     fwd_y = math.sin(heading)
-    lat_x = -math.sin(heading)   # left of heading
-    lat_y =  math.cos(heading)
 
     # 1. Drive past the crop edge
     bx = x + buf * fwd_x
     by = y + buf * fwd_y
 
-    # 2. Cross to the next row (heading reverses)
-    cx = bx + row_spacing * lat_x
-    cy = by + row_spacing * lat_y
+    # 2. Cross to the next row using the fixed lateral direction from yaw0
+    cx = bx + row_spacing * lat_x0
+    cy = by + row_spacing * lat_y0
     next_heading = heading + math.pi
 
     # 3. Drive back to the field edge in the new (reversed) direction
@@ -253,7 +256,11 @@ def generate_coverage_waypoints(x0, y0, yaw0,
 
         if i < num_rows - 1:
             waypoints.extend(
-                _end_of_row_maneuver(end_x, end_y, heading, row_spacing, buf, frame, now)
+                _end_of_row_maneuver(
+                    end_x, end_y, heading, row_spacing, buf,
+                    lat_x, lat_y,   # fixed lateral direction from yaw0
+                    frame, now,
+                )
             )
 
     return waypoints
@@ -313,8 +320,9 @@ class AutonomousRowCoverageNode(Node):
         self._vel_pub  = self.create_publisher(Twist,  '/cmd_vel',        10)
 
         # ── Services ─────────────────────────────────────────────────────────
-        self.create_service(Trigger, '~/start', self._start_cb)
-        self.create_service(Trigger, '~/stop',  self._stop_cb)
+        self.create_service(Trigger, '~/start',        self._start_cb)
+        self.create_service(Trigger, '~/stop',         self._stop_cb)
+        self.create_service(Trigger, '~/mark_row_end', self._mark_row_end_cb)
 
         # ── LiDAR subscription ───────────────────────────────────────────────
         self.create_subscription(
@@ -517,6 +525,51 @@ class AutonomousRowCoverageNode(Node):
         self._state = _State.IDLE
         response.success = True
         response.message = 'Stopped.'
+        return response
+
+    def _mark_row_end_cb(self, request, response):
+        """
+        Manual row-end marker for LEARNING mode.
+
+        Call this service when you are standing at the end of row 0 to teach
+        the system the row length without relying on LiDAR density detection.
+        The robot will cancel its open-ended drive and begin the full coverage
+        plan using the measured distance as row_length.
+        """
+        if self._state != _State.LEARNING:
+            response.success = False
+            response.message = (
+                f'mark_row_end only valid in LEARNING state (current: {self._state}). '
+                'Call ~/start first with row_length:=0.'
+            )
+            return response
+
+        pose = self._get_pose()
+        if pose is None or self._learn_start is None:
+            response.success = False
+            response.message = 'Cannot read robot pose from TF.'
+            return response
+
+        learned_dist = math.hypot(
+            pose[0] - self._learn_start[0],
+            pose[1] - self._learn_start[1],
+        )
+        min_dist = self.get_parameter('row_end_min_dist').value
+        if learned_dist < min_dist:
+            response.success = False
+            response.message = (
+                f'Only {learned_dist:.2f} m from start — too short '
+                f'(minimum row_end_min_dist = {min_dist:.1f} m). '
+                'Drive further before marking row end.'
+            )
+            return response
+
+        self.get_logger().info(
+            f'Row end marked manually at {learned_dist:.2f} m from start.'
+        )
+        self._on_row_end_detected(pose, learned_dist)
+        response.success = True
+        response.message = f'Row end marked. Row length = {learned_dist:.2f} m. Starting coverage.'
         return response
 
     # ──────────────────────────────────────────────────────────────────────────

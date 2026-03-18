@@ -4,3 +4,6 @@ install/
 log/
 *.bag
 *.db3
+__pycache__/
+*.pyc
+*.pyo
